@@ -594,7 +594,7 @@ static void read_rds(struct v4l2_rds *handle, const int fd, const int wait_limit
 
 	while (!params.terminate_decoding) {
 		memset(&rds_data, 0, sizeof(rds_data));
-		if ((byte_cnt=read(fd, &rds_data, 3)) != 3) {
+		if ((byte_cnt=read(fd, &rds_data, 3)) != 3) {  // 不足3字节丢弃，等待
 			if (byte_cnt == 0) {
 				printf("\nEnd of input file reached \n");
 				break;
@@ -610,6 +610,8 @@ static void read_rds(struct v4l2_rds *handle, const int fd, const int wait_limit
 		else if (byte_cnt == 3) {
 			error_cnt = 0;
 			/* true if a new group was decoded */
+			// 当有一个字段更新，就返回
+			// updated_fields 不为空，即有字段更新
 			if ((updated_fields = v4l2_rds_add(handle, &rds_data))) {
 				print_rds_data(handle, updated_fields);
 				if (params.options[OptVerbose])
@@ -627,6 +629,7 @@ static void read_rds_from_fd(const int fd)
 	struct v4l2_rds *rds_handle;
 
 	/* create an rds handle for the current device */
+	// - 将 rds_private_state 指针转换为 v4l2_rds 指针返回
 	if (!(rds_handle = v4l2_rds_create(true))) {
 		fprintf(stderr, "Failed to init RDS lib: %s\n", strerror(errno));
 		exit(1);
@@ -873,10 +876,10 @@ int main(int argc, char **argv)
 	struct v4l2_capability vcap;	/* list_cap */
 	struct v4l2_frequency vf;	/* get_freq/set_freq */
 
-	memset(&tuner, 0, sizeof(tuner));
+	memset(&tuner, 0, sizeof(tuner));  // tuner 结构体的所有成员都被清 0
 	memset(&vcap, 0, sizeof(vcap));
 	memset(&vf, 0, sizeof(vf));
-	strcpy(params.fd_name, "/dev/radio0");
+	strcpy(params.fd_name, "/dev/radio0");  // 复制字符串 "/dev/radio0" 到 fd_name
 
 	/* define locale for unicode support */
 	if (!setlocale(LC_CTYPE, "")) {

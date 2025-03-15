@@ -36,6 +36,9 @@
  * is decoded and stored in them until it can be verified and copied to the
  * public part of the  rds structure (handle) */
 /* for meaning of abbreviations check the library header libv4l2rds.h */
+// 结构体用于封装解码过程的私有状态信息
+// 其中的字段（handle 除外）仅供内部使用
+// 新解码的信息会存储在这些字段中，直到它们被验证后再复制到 rds 结构的公共部分（handle）
 struct rds_private_state {
 	/* v4l2_rds has to be in first position, to allow typecasting between
 	 * v4l2_rds and rds_private_state pointers */
@@ -84,6 +87,7 @@ static inline uint8_t set_bit(uint8_t input, uint8_t bitmask, bool bitvalue)
  * into the RDS group that's currently being received
  *
  * block A of RDS group always contains PI code of program */
+// block A: PI
 static uint32_t rds_decode_a(struct rds_private_state *priv_state, struct v4l2_rds_data *rds_data)
 {
 	struct v4l2_rds *handle = &priv_state->handle;
@@ -96,10 +100,11 @@ static uint32_t rds_decode_a(struct rds_private_state *priv_state, struct v4l2_r
 	/* compare PI values to detect PI update (Channel Switch)
 	 * --> new PI is only accepted, if the same PI is received
 	 * at least 2 times in a row */
+	// 仅当收到相同的 PI 至少连续2次时 才接受新的 PI
 	if (pi != handle->pi && pi == priv_state->new_pi) {
 		handle->pi = pi;
-		handle->valid_fields |= V4L2_RDS_PI;
-		updated_fields |= V4L2_RDS_PI;
+		handle->valid_fields |= V4L2_RDS_PI;  // 标记 PI 字段为有效
+		updated_fields |= V4L2_RDS_PI;        // 标记 PI 字段已更新
 	} else if (pi != handle->pi && pi != priv_state->new_pi) {
 		priv_state->new_pi = pi;
 	}
@@ -110,6 +115,7 @@ static uint32_t rds_decode_a(struct rds_private_state *priv_state, struct v4l2_r
 /* block B of RDS group always contains Group Type Code, Group Type information
  * Traffic Program Code and Program Type Code as well as 5 bits of Group Type
  * depending information */
+// block B：组类型代码、组类型信息、TP、PTY
 static uint32_t rds_decode_b(struct rds_private_state *priv_state, struct v4l2_rds_data *rds_data)
 {
 	struct v4l2_rds *handle = &priv_state->handle;
@@ -125,6 +131,7 @@ static uint32_t rds_decode_b(struct rds_private_state *priv_state, struct v4l2_r
 	grp->group_version = (rds_data->msb & 0x08) ? 'B' : 'A';
 
 	/* bit 10 (2 of msb) defines Traffic program Code */
+	// 更新 TP
 	traffic_prog = (bool)rds_data->msb & 0x04;
 	if (handle->tp != traffic_prog) {
 		handle->tp = traffic_prog;
@@ -138,13 +145,14 @@ static uint32_t rds_decode_b(struct rds_private_state *priv_state, struct v4l2_r
 	/* bits 5-9 contain the PTY code */
 	pty = (rds_data->msb << 3) | (rds_data->lsb >> 5);
 	pty &= 0x1f; /* mask out 3 irrelevant bits */
+
 	/* only accept new PTY if same PTY is received twice in a row
 	 * and filter out cases where the PTY is already known */
 	if (handle->pty == pty) {
 		priv_state->new_pty = pty;
 		return updated_fields;
 	}
-
+	// 仅当连续两次接收到相同的 PTY 时才接受新的 PTY
 	if (priv_state->new_pty == pty) {
 		handle->pty = priv_state->new_pty;
 		updated_fields |= V4L2_RDS_PTY;
@@ -423,6 +431,7 @@ static uint32_t rds_decode_group1(struct rds_private_state *priv_state)
 }
 
 /* group 2: radio text */
+// RT
 static uint32_t rds_decode_group2(struct rds_private_state *priv_state)
 {
 	struct v4l2_rds *handle = &priv_state->handle;
@@ -430,38 +439,44 @@ static uint32_t rds_decode_group2(struct rds_private_state *priv_state)
 	uint32_t updated_fields = 0;
 
 	/* bit 0-3 of block B contain the segment code */
-	uint8_t segment = grp->data_b_lsb & 0x0f;
+	uint8_t segment = grp->data_b_lsb & 0x0f;  // 保留 grp->data_b_lsb 的低 4 位
 	/* bit 4 of block b contains the A/B text flag (new radio text
 	 * will be transmitted) */
-	bool rt_ab_flag_n = grp->data_b_lsb & 0x10;
+	bool rt_ab_flag_n = grp->data_b_lsb & 0x10;  // 检查 A/B 标志位，用于判断是否是新的广播文本
 
 	/* new Radio Text will be transmitted */
 	if (rt_ab_flag_n != handle->rt_ab_flag) {
 		handle->rt_ab_flag = rt_ab_flag_n;
-		memset(handle->rt, 0, 64);
-		handle->valid_fields &= ~V4L2_RDS_RT;
-		updated_fields |= V4L2_RDS_RT;
-		priv_state->next_rt_segment = 0;
+		memset(handle->rt, 0, 64);   // 初始化64字节数据
+		handle->valid_fields &= ~V4L2_RDS_RT; // 标记文本无效
+		updated_fields |= V4L2_RDS_RT;  // 标记更新
+		priv_state->next_rt_segment = 0;   // 重置段计数器
 	}
 
 	/* further decoding of data depends on type of message (A or B)
 	 * Type A allows RTs with a max length of 64 chars
 	 * Type B allows RTs with a max length of 32 chars */
+	// 数据的进一步解码取决于消息类型（A 或 B）
+	// A 类允许 RT 的最大长度为 64 个字符
+	// B 型允许 RT 最大长度为 32 个字符
 	if (grp->group_version == 'A') {
-		if (segment == 0 || segment == priv_state->next_rt_segment) {
+		// 用于确保 RDS 文本片段按正确的顺序处理
+		// 当收到第一个片段（segment = 0）时，这是新文本消息的开始
+		// segment == priv_state->next_rt_segment, 保接收到的片段正是我们期待的下一个片段
+		if (segment == 0 || segment == priv_state->next_rt_segment) {  
 			priv_state->new_rt[segment * 4] = grp->data_c_msb;
 			priv_state->new_rt[segment * 4 + 1] = grp->data_c_lsb;
 			priv_state->new_rt[segment * 4 + 2] = grp->data_d_msb;
 			priv_state->new_rt[segment * 4 + 3] = grp->data_d_lsb;
 			priv_state->next_rt_segment = segment + 1;
-			if (segment == 0x0f) {
+			if (segment == 0x0f) {  // 到达了最后一个文本片段 15, 16个片段*4 = 64 字节
 				handle->rt_length = 64;
 				handle->valid_fields |= V4L2_RDS_RT;
-				if (memcmp(handle->rt, priv_state->new_rt, 64)) {
-					memcpy(handle->rt, priv_state->new_rt, 64);
+				if (memcmp(handle->rt, priv_state->new_rt, 64)) {  // 当前文本和新文本不相同
+					memcpy(handle->rt, priv_state->new_rt, 64);  // 复制新文本
 					updated_fields |= V4L2_RDS_RT;
 				}
-				priv_state->next_rt_segment = 0;
+				priv_state->next_rt_segment = 0;  // 重置段计数器
 			}
 		}
 	} else {
@@ -485,12 +500,15 @@ static uint32_t rds_decode_group2(struct rds_private_state *priv_state)
 
 	/* determine if complete rt was received
 	 * a carriage return (0x0d) can end a message early */
+	// 判断是否收到完整的rt
+	// 回车符（0x0d）可以提前结束消息
 	for (int i = 0; i < 64; i++) {
-		if (priv_state->new_rt[i] == 0x0d) {
+		if (priv_state->new_rt[i] == 0x0d) {   // 0x0d 是回车符 CR
 			/* replace CR with terminating character */
-			priv_state->new_rt[i] = '\0';
+			priv_state->new_rt[i] = '\0';     // 将回车符替换为字符串结束符
 			handle->rt_length = i;
 			handle->valid_fields |= V4L2_RDS_RT;
+			// 更新文本并标记变化
 			if (memcmp(handle->rt, priv_state->new_rt, handle->rt_length)) {
 					memcpy(handle->rt, priv_state->new_rt,
 						handle->rt_length);
@@ -737,11 +755,20 @@ void v4l2_rds_reset(struct v4l2_rds *handle, bool reset_statistics)
  * Decoding is only done once a complete group was received. This is slower compared
  * to decoding the group type independent information up front, but adds a barrier
  * against corrupted data (happens regularly when reception is weak) */
+
+/** 
+ * 该函数将原始 RDS 数据块解码为完整的组。  
+ * 一旦成功接收到完整的组，就会将其解码并存储到 RDS 句柄的字段中。  
+ * 只有在接收到完整的组后才进行解码。  
+ * 这种方式比直接解码与组类型无关的信息要慢，但能有效防止数据损坏，  
+ * （在信号接收较弱时，数据损坏是常见情况）。 
+ */
 uint32_t v4l2_rds_add(struct v4l2_rds *handle, struct v4l2_rds_data *rds_data)
 {
 	struct rds_private_state *priv_state = (struct rds_private_state *) handle;
 	struct v4l2_rds_data *rds_data_raw = priv_state->rds_data_raw;
 	struct v4l2_rds_statistics *rds_stats = &handle->rds_statistics;
+
 	uint32_t updated_fields = 0;
 	uint8_t *decode_state = &(priv_state->decode_state);
 
@@ -750,6 +777,7 @@ uint32_t v4l2_rds_add(struct v4l2_rds *handle, struct v4l2_rds_data *rds_data)
 
 	rds_stats->block_cnt++;
 	/* check for corrected / uncorrectable errors in the data */
+	// 数据校验
 	if (rds_data->block & V4L2_RDS_BLOCK_ERROR) {
 		block_id = -1;
 		rds_stats->block_error_cnt++;
@@ -762,6 +790,7 @@ uint32_t v4l2_rds_add(struct v4l2_rds *handle, struct v4l2_rds_data *rds_data)
 		if (block_id == 0) {
 			*decode_state = RDS_A_RECEIVED;
 			/* begin reception of a new data group, reset raw buffer to 0 */
+			// 开始接收新的数据组，重置原始缓冲区为 0
 			memset(rds_data_raw, 0, sizeof(rds_data_raw));
 			rds_data_raw[0] = *rds_data;
 		} else {
@@ -798,13 +827,17 @@ uint32_t v4l2_rds_add(struct v4l2_rds *handle, struct v4l2_rds_data *rds_data)
 			rds_data_raw[3] = *rds_data;
 			/* a full group was received */
 			rds_stats->group_cnt++;
+
 			/* decode group type independent fields */
+			// 解码与组类型无关的字段
 			memset(&priv_state->rds_group, 0, sizeof(priv_state->rds_group));
 			updated_fields |= rds_decode_a(priv_state, &rds_data_raw[0]);
 			updated_fields |= rds_decode_b(priv_state, &rds_data_raw[1]);
 			rds_decode_c(priv_state, &rds_data_raw[2]);
 			rds_decode_d(priv_state, &rds_data_raw[3]);
+
 			/* decode group type dependent fields */
+			// 解码与组类型有关的字段
 			updated_fields |= rds_decode_group(priv_state);
 			return updated_fields;
 		}
